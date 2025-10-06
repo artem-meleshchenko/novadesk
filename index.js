@@ -1,6 +1,6 @@
 require("dotenv").config();
+const express = require("express");
 const { Telegraf, Markup } = require("telegraf");
-const { insertReserva, ultimasReservas } = require("./db"); // ⬅️ NUEVO
 
 const token = process.env.BOT_TOKEN;
 if (!token) {
@@ -8,9 +8,13 @@ if (!token) {
   process.exit(1);
 }
 
+const NODE_ENV = process.env.NODE_ENV || "development";
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN; // ej: https://novadesk-xxxxx.azurewebsites.net
+const WEBHOOK_PATH = process.env.WEBHOOK_PATH || "/telegram/webhook-123"; // usa un path “secreto”
+
 const bot = new Telegraf(token);
 
-// Menú principal
+// ====== Bot UI ======
 const menuPrincipal = Markup.inlineKeyboard([
   [Markup.button.callback("🛎️ Check-in", "CHECKIN")],
   [Markup.button.callback("ℹ️ Info del hotel", "INFO")],
@@ -46,48 +50,47 @@ bot.action("CONTACTO", async (ctx) => {
   );
 });
 
-// Comando admin para ver últimas reservas (útil para probar)
-bot.command("ultimas", async (ctx) => {
-  const filas = await ultimasReservas(5);
-  if (!filas.length) return ctx.reply("Aún no hay reservas registradas.");
-  const texto = filas
-    .map(
-      (r) =>
-        `#${r.id} — ${r.last_name} / ${r.booking_number} · ${new Date(
-          r.created_at
-        ).toLocaleString()}`
-    )
-    .join("\n");
-  return ctx.reply(texto);
-});
+// ====== Modo DEV (polling) vs PROD (webhook) ======
+if (NODE_ENV === "production") {
+  // Webhook en Azure
+  const app = express();
 
-// Captura 'Apellido Numero' y guarda en DB
-bot.on("text", async (ctx) => {
-  const texto = ctx.message.text.trim();
-  const m = texto.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]+)\s+(\d{4,})$/);
-  if (m) {
-    const last_name = m[1].trim();
-    const booking_number = m[2];
-    try {
-      const row = await insertReserva(last_name, booking_number);
-      await ctx.reply(
-        `✅ *Pre check-in registrado*\nApellido: *${row.last_name}*\nReserva: *${row.booking_number}*\nID: *${row.id}*`,
-        { parse_mode: "Markdown" }
-      );
-    } catch (e) {
-      console.error(e);
-      await ctx.reply("⚠️ Error al registrar. Inténtalo de nuevo.");
+  // Healthcheck y home
+  app.get("/", (_req, res) => res.status(200).send("NovaDesk bot OK"));
+  app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
+
+  // Ruta del webhook (debe coincidir con WEBHOOK_PATH)
+  app.use(express.json());
+  app.use(WEBHOOK_PATH, bot.webhookCallback(WEBHOOK_PATH));
+
+  const port = process.env.PORT || 3000;
+  app.listen(port, async () => {
+    console.log(`🚀 Server escuchando en puerto ${port}`);
+    if (!WEBHOOK_DOMAIN) {
+      console.error("⚠️ Falta WEBHOOK_DOMAIN en variables de entorno de Azure");
+      return;
     }
-  }
-});
+    const fullUrl = WEBHOOK_DOMAIN + WEBHOOK_PATH;
+    try {
+      // Opcional: confirmar identidad del bot
+      const info = await bot.telegram.getMe();
+      console.log(`🤖 Bot @${info.username} listo (webhook) → ${fullUrl}`);
 
-bot.telegram.getMe().then((botInfo) => {
-  console.log(`🤖 Bot @${botInfo.username} listo (polling)`);
-});
+      // SUGERENCIA: configurar el webhook desde fuera (script o curl). Aquí solo informamos.
+      console.log("ℹ️ Recuerda ejecutar setWebhook apuntando a:", fullUrl);
+    } catch (err) {
+      console.error("❌ Error iniciando bot:", err.message);
+    }
+  });
+} else {
+  // Desarrollo (Codespaces) con polling
+  bot.telegram.getMe().then((info) => {
+    console.log(`🤖 Bot @${info.username} listo (polling DEV)`);
+  });
+  bot.launch().then(() => {
+    console.log("✅ NovaDesk bot en *polling* (DEV)");
+  });
 
-bot.launch().then(() => {
-  console.log("✅ NovaDesk bot en *polling* está listo");
-});
-
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+}

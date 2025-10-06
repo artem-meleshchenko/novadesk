@@ -1,0 +1,31 @@
+name: Deploy NovaDesk to Azure Web App
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: npm ci
+
+      - name: Zip artifact
+        run: |
+          zip -r release.zip . -x ".git/*"
+
+      - name: Deploy to Azure WebApp
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
+          package: release.zip
