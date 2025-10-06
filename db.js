@@ -1,0 +1,51 @@
+const path = require("path");
+const fs = require("fs");
+const sqlite3 = require("sqlite3").verbose();
+
+const dataDir = path.join(__dirname, "data");
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+const dbPath = path.join(dataDir, "novadesk.sqlite");
+const db = new sqlite3.Database(dbPath);
+
+// Crear tabla si no existe
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS reservas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      last_name TEXT NOT NULL,
+      booking_number TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+});
+
+module.exports = {
+  db,
+  insertReserva(last_name, booking_number) {
+    return new Promise((resolve, reject) => {
+      const created_at = new Date().toISOString();
+      db.run(
+        `INSERT INTO reservas (last_name, booking_number, created_at)
+         VALUES (?, ?, ?)`,
+        [last_name, booking_number, created_at],
+        function (err) {
+          if (err) return reject(err);
+          resolve({ id: this.lastID, last_name, booking_number, created_at });
+        }
+      );
+    });
+  },
+  ultimasReservas(limit = 5) {
+    return new Promise((resolve, reject) => {
+      db.all(
+        `SELECT id, last_name, booking_number, created_at
+         FROM reservas
+         ORDER BY id DESC
+         LIMIT ?`,
+        [limit],
+        (err, rows) => (err ? reject(err) : resolve(rows))
+      );
+    });
+  },
+};
