@@ -16,16 +16,16 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install
+      - name: Install deps
         run: npm ci
 
-      - name: Zip artifact
-        run: |
-          zip -r release.zip . -x ".git/*"
+      - name: Azure Login (Service Principal)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Deploy to Azure WebApp
         uses: azure/webapps-deploy@v2
         with:
-          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
-          package: release.zip
+          app-name: novadesk-app
+          package: .
