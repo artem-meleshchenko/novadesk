@@ -3,14 +3,11 @@ const express = require("express");
 const { Telegraf, Markup } = require("telegraf");
 
 const token = process.env.BOT_TOKEN;
-if (!token) {
-  console.error("❌ Falta BOT_TOKEN en .env");
-  process.exit(1);
-}
+if (!token) { console.error("❌ Falta BOT_TOKEN"); process.exit(1); }
 
 const NODE_ENV = process.env.NODE_ENV || "development";
-const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN; // ej: https://novadesk-xxxxx.azurewebsites.net
-const WEBHOOK_PATH = process.env.WEBHOOK_PATH || "/telegram/webhook-123"; // usa un path “secreto”
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
+const WEBHOOK_PATH = (process.env.WEBHOOK_PATH || "/telegram/webhook-123").trim();
 
 const bot = new Telegraf(token);
 
@@ -52,45 +49,35 @@ bot.action("CONTACTO", async (ctx) => {
 
 // ====== Modo DEV (polling) vs PROD (webhook) ======
 if (NODE_ENV === "production") {
-  // Webhook en Azure
   const app = express();
 
-  // Healthcheck y home
+  // Logs y ruta de debug para ver exactamente qué valores usa la app
+  console.log("✅ NODE_ENV:", NODE_ENV);
+  console.log("✅ WEBHOOK_DOMAIN:", WEBHOOK_DOMAIN);
+  console.log("✅ WEBHOOK_PATH:", JSON.stringify(WEBHOOK_PATH));
+
+  // MIDDLEWARE de traza (para ver hits al webhook)
+  app.use((req, _res, next) => { console.log(`➡️  ${req.method} ${req.url}`); next(); });
+
+  // Endpoints de salud
   app.get("/", (_req, res) => res.status(200).send("NovaDesk bot OK"));
   app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
+  app.get("/debug", (_req, res) =>
+    res.json({ NODE_ENV, WEBHOOK_DOMAIN, WEBHOOK_PATH })
+  );
 
-  // Ruta del webhook (debe coincidir con WEBHOOK_PATH)
-  app.use(express.json());
-  app.use(WEBHOOK_PATH, bot.webhookCallback(WEBHOOK_PATH));
+  // **MONTAJE EXPLÍCITO DEL WEBHOOK**
+  app.get(WEBHOOK_PATH, (_req, res) => res.status(200).send("OK"));        // GET (diagnóstico)
+  app.post(WEBHOOK_PATH, express.json(), bot.webhookCallback(WEBHOOK_PATH)); // POST real
 
   const port = process.env.PORT || 3000;
   app.listen(port, async () => {
     console.log(`🚀 Server escuchando en puerto ${port}`);
-    if (!WEBHOOK_DOMAIN) {
-      console.error("⚠️ Falta WEBHOOK_DOMAIN en variables de entorno de Azure");
-      return;
-    }
-    const fullUrl = WEBHOOK_DOMAIN + WEBHOOK_PATH;
-    try {
-      // Opcional: confirmar identidad del bot
-      const info = await bot.telegram.getMe();
-      console.log(`🤖 Bot @${info.username} listo (webhook) → ${fullUrl}`);
-
-      // SUGERENCIA: configurar el webhook desde fuera (script o curl). Aquí solo informamos.
-      console.log("ℹ️ Recuerda ejecutar setWebhook apuntando a:", fullUrl);
-    } catch (err) {
-      console.error("❌ Error iniciando bot:", err.message);
-    }
+    const info = await bot.telegram.getMe();
+    console.log(`🤖 Bot @${info.username} listo (webhook) → ${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`);
   });
 } else {
-  // Desarrollo (Codespaces) con polling
-  bot.telegram.getMe().then((info) => {
-    console.log(`🤖 Bot @${info.username} listo (polling DEV)`);
-  });
-  bot.launch().then(() => {
-    console.log("✅ NovaDesk bot en *polling* (DEV)");
-  });
-
+  bot.launch().then(() => console.log("✅ NovaDesk bot en *polling* (DEV)"));
   process.once("SIGINT", () => bot.stop("SIGINT"));
   process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }
