@@ -99,6 +99,10 @@ bot.command("ultimas", async (ctx) => {
   }
 });
 
+bot.command("admin", (ctx) =>
+  ctx.reply("Panel: https://novadesk-app-hhh5cce5hretcgap.chilecentral-01.azurewebsites.net/admin")
+);
+
 // Captura 'Apellido Numero' y guarda
 bot.on("text", async (ctx) => {
   const texto = (ctx.message?.text || "").trim();
