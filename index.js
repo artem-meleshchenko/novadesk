@@ -123,11 +123,74 @@ bot.on("text", async (ctx) => {
 // ====== Server (DEV/PROD) ======
 if (NODE_ENV === "production") {
   const app = express();
-
+  
   // Logs y trazas HTTP
   console.log("✅ NODE_ENV:", NODE_ENV);
   console.log("✅ WEBHOOK_DOMAIN:", WEBHOOK_DOMAIN);
   console.log("✅ WEBHOOK_PATH:", JSON.stringify(WEBHOOK_PATH));
+
+  function basicAuth(req, res, next) {
+    const b64 = (req.headers.authorization || "").split(" ")[1] || "";
+    const [u, p] = Buffer.from(b64, "base64").toString().split(":");
+    if (u === process.env.ADMIN_USER && p === process.env.ADMIN_PASS) return next();
+    res.set("WWW-Authenticate", 'Basic realm="NovaDesk Admin"');
+    return res.status(401).send("Auth required");
+  }
+
+  app.get("/api/reservas", basicAuth, async (_req, res) => {
+    try {
+      const rows = await ultimasReservas(50);
+      res.json({ data: rows });
+    } catch (e) {
+      console.error("GET /api/reservas", e);
+      res.status(500).json({ error: "db_error" });
+    }
+  });
+
+  // --- Panel HTML súper mínimo ---
+  app.get("/admin", basicAuth, async (_req, res) => {
+    try {
+      const rows = await ultimasReservas(50);
+      const trs = rows
+        .map(
+          (r) =>
+            `<tr><td>${r.id}</td><td>${r.last_name}</td><td>${r.booking_number}</td><td>${new Date(
+              r.created_at
+            ).toLocaleString()}</td></tr>`
+        )
+        .join("");
+      const html = `
+        <!doctype html>
+        <html lang="es"><head>
+          <meta charset="utf-8" />
+          <title>NovaDesk Admin</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <style>
+            body{font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:24px;}
+            h1{margin:0 0 16px;}
+            table{border-collapse: collapse; width:100%;}
+            th,td{border:1px solid #ddd; padding:8px; font-size:14px;}
+            th{background:#f5f5f5; text-align:left;}
+            tr:nth-child(even){background:#fafafa;}
+            .top{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
+            .pill{font-size:12px; background:#eef; padding:4px 8px; border-radius:999px;}
+          </style>
+        </head><body>
+          <div class="top">
+            <h1>NovaDesk — Reservas</h1>
+            <span class="pill">Live</span>
+          </div>
+          <table>
+            <thead><tr><th>ID</th><th>Apellido</th><th>Reserva</th><th>Creado</th></tr></thead>
+            <tbody>${trs || "<tr><td colspan=4>Sin datos</td></tr>"}</tbody>
+          </table>
+        </body></html>`;
+      res.status(200).send(html);
+    } catch (e) {
+      console.error("GET /admin", e);
+      res.status(500).send("Error");
+    }
+  });
 
   app.use((req, _res, next) => {
     console.log(`➡️  ${req.method} ${req.url}`);
