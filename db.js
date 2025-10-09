@@ -48,4 +48,33 @@ module.exports = {
       );
     });
   },
+  listReservas(page = 1, size = 20) {
+    return new Promise((resolve, reject) => {
+      const limit = Math.max(1, Math.min(200, Number(size)));
+      const offset = Math.max(0, (Math.max(1, Number(page)) - 1) * limit);
+      db.all(
+        `SELECT id, last_name, booking_number, created_at
+        FROM reservas
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?`,
+        [limit, offset],
+        (err, rows) => (err ? reject(err) : resolve(rows))
+      );
+    });
+  },
+  countReservas() {
+    return new Promise((resolve, reject) => {
+      db.get(`SELECT COUNT(*) AS total FROM reservas`, (err, row) =>
+        err ? reject(err) : resolve(row.total)
+      );
+    });
+  },
+  deleteReserva(id) {
+    return new Promise((resolve, reject) => {
+      db.run(`DELETE FROM reservas WHERE id = ?`, [id], function (err) {
+        if (err) return reject(err);
+        resolve(this.changes); // 1 si borró, 0 si no
+      });
+    });
+  }, 
 };

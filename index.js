@@ -2,6 +2,7 @@
 // Modo DEV: polling | Modo PROD: webhook (Express en Azure)
 
 require("dotenv").config();
+const rateLimit = require("express-rate-limit");
 const express = require("express");
 const { Telegraf, Markup } = require("telegraf");
 
@@ -127,12 +128,19 @@ bot.on("text", async (ctx) => {
 // ====== Server (DEV/PROD) ======
 if (NODE_ENV === "production") {
   const app = express();
+  const adminLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
   
   // Logs y trazas HTTP
   console.log("✅ NODE_ENV:", NODE_ENV);
   console.log("✅ WEBHOOK_DOMAIN:", WEBHOOK_DOMAIN);
   console.log("✅ WEBHOOK_PATH:", JSON.stringify(WEBHOOK_PATH));
 
+  // --- auth básica ---
   function basicAuth(req, res, next) {
     const b64 = (req.headers.authorization || "").split(" ")[1] || "";
     const [u, p] = Buffer.from(b64, "base64").toString().split(":");
@@ -141,28 +149,96 @@ if (NODE_ENV === "production") {
     return res.status(401).send("Auth required");
   }
 
-  app.get("/api/reservas", basicAuth, async (_req, res) => {
+  // Aplica limitador a rutas admin/api
+  app.use(["/admin", "/api"], adminLimiter);
+
+  // --- API: reservas con paginación ---
+  app.get("/api/reservas", basicAuth, async (req, res) => {
     try {
-      const rows = await ultimasReservas(50);
-      res.json({ data: rows });
+      const page = Number(req.query.page || 1);
+      const size = Number(req.query.size || 20);
+      const [rows, total] = await Promise.all([
+        listReservas(page, size),
+        countReservas(),
+      ]);
+      res.json({ page, size, total, data: rows });
     } catch (e) {
       console.error("GET /api/reservas", e);
       res.status(500).json({ error: "db_error" });
     }
   });
 
-  // --- Panel HTML súper mínimo ---
-  app.get("/admin", basicAuth, async (_req, res) => {
+  // --- API: export CSV ---
+  app.get("/api/reservas.csv", basicAuth, async (req, res) => {
     try {
-      const rows = await ultimasReservas(50);
+      const page = Number(req.query.page || 1);
+      const size = Number(req.query.size || 100); // export un poco mayor
+      const rows = await listReservas(page, size);
+      const header = "id,last_name,booking_number,created_at";
+      const lines = rows.map(
+        (r) =>
+          `${r.id},"${(r.last_name || "").replace(/"/g, '""')}",` +
+          `"${(r.booking_number || "").replace(/"/g, '""')}",${r.created_at}`
+      );
+      const csv = [header, ...lines].join("\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="reservas-p${page}-s${size}.csv"`
+      );
+      res.status(200).send(csv);
+    } catch (e) {
+      console.error("GET /api/reservas.csv", e);
+      res.status(500).send("error");
+    }
+  });
+
+  // --- API: borrar una reserva (demo) ---
+  app.delete("/api/reservas/:id", basicAuth, express.json(), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: "bad_id" });
+      const changes = await deleteReserva(id);
+      res.json({ ok: true, deleted: changes });
+    } catch (e) {
+      console.error("DELETE /api/reservas/:id", e);
+      res.status(500).json({ error: "db_error" });
+    }
+  });
+
+  app.get("/admin", basicAuth, async (req, res) => {
+    try {
+      const page = Number(req.query.page || 1);
+      const size = Number(req.query.size || 20);
+      const [rows, total] = await Promise.all([
+        listReservas(page, size),
+        countReservas(),
+      ]);
+      const pages = Math.max(1, Math.ceil(total / size));
+
+      const qs = (p) =>
+        `/admin?page=${p}&size=${size}`;
+
+      const pager =
+        `<div class="pager">` +
+        `<a href="${qs(Math.max(1, page - 1))}">&laquo; Anterior</a>` +
+        `<span> Página ${page} / ${pages} </span>` +
+        `<a href="${qs(Math.min(pages, page + 1))}">Siguiente &raquo;</a>` +
+        `</div>`;
+
       const trs = rows
         .map(
           (r) =>
-            `<tr><td>${r.id}</td><td>${r.last_name}</td><td>${r.booking_number}</td><td>${new Date(
-              r.created_at
-            ).toLocaleString()}</td></tr>`
+            `<tr>
+              <td>${r.id}</td>
+              <td>${r.last_name}</td>
+              <td>${r.booking_number}</td>
+              <td>${new Date(r.created_at).toLocaleString()}</td>
+              <td><button data-id="${r.id}" class="del">🗑</button></td>
+            </tr>`
         )
         .join("");
+
       const html = `
         <!doctype html>
         <html lang="es"><head>
@@ -176,18 +252,43 @@ if (NODE_ENV === "production") {
             th,td{border:1px solid #ddd; padding:8px; font-size:14px;}
             th{background:#f5f5f5; text-align:left;}
             tr:nth-child(even){background:#fafafa;}
-            .top{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
+            .top{display:flex; gap:12px; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap;}
             .pill{font-size:12px; background:#eef; padding:4px 8px; border-radius:999px;}
+            .pager{display:flex; gap:8px; align-items:center; margin:12px 0;}
+            .pager a{padding:4px 8px; border:1px solid #ddd; border-radius:6px; text-decoration:none; color:#333;}
+            .actions{display:flex; gap:8px; align-items:center;}
+            .actions a{padding:6px 10px; border:1px solid #ddd; border-radius:8px; text-decoration:none; color:#333;}
           </style>
         </head><body>
           <div class="top">
             <h1>NovaDesk — Reservas</h1>
-            <span class="pill">Live</span>
+            <div class="actions">
+              <a href="/api/reservas?page=${page}&size=${size}">API JSON</a>
+              <a href="/api/reservas.csv?page=${page}&size=${size}">Export CSV</a>
+              <span class="pill">Total: ${total}</span>
+            </div>
           </div>
+          ${pager}
           <table>
-            <thead><tr><th>ID</th><th>Apellido</th><th>Reserva</th><th>Creado</th></tr></thead>
-            <tbody>${trs || "<tr><td colspan=4>Sin datos</td></tr>"}</tbody>
+            <thead><tr><th>ID</th><th>Apellido</th><th>Reserva</th><th>Creado</th><th></th></tr></thead>
+            <tbody>${trs || "<tr><td colspan=5>Sin datos</td></tr>"}</tbody>
           </table>
+          ${pager}
+          <script>
+            // Borrar fila (demo)
+            const authHeader = 'Basic ' + btoa('${process.env.ADMIN_USER}:${process.env.ADMIN_PASS}');
+            document.querySelectorAll('.del').forEach(btn=>{
+              btn.addEventListener('click', async () => {
+                const id = btn.getAttribute('data-id');
+                if(!confirm('¿Borrar registro #' + id + '?')) return;
+                const res = await fetch('/api/reservas/' + id, {
+                  method: 'DELETE',
+                  headers: { Authorization: authHeader, 'Content-Type':'application/json' }
+                });
+                if(res.ok) location.reload(); else alert('Error al borrar');
+              });
+            });
+          </script>
         </body></html>`;
       res.status(200).send(html);
     } catch (e) {
