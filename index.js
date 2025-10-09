@@ -7,18 +7,16 @@ const express = require("express");
 const { Telegraf, Markup } = require("telegraf");
 
 // (Opcional) persistencia si creaste db.js en Tema 3
-let insertReserva, ultimasReservas;
+let insertReserva, ultimasReservas, listReservas, countReservas, deleteReserva;
 try {
-  ({ insertReserva, ultimasReservas } = require("./db"));
+  ({ insertReserva, ultimasReservas, listReservas, countReservas, deleteReserva } = require("./db"));
 } catch {
-  // Si no existe db.js, crea stubs inofensivos
-  insertReserva = async (last_name, booking_number) => ({
-    id: 0,
-    last_name,
-    booking_number,
-    created_at: new Date().toISOString(),
-  });
+  // stubs si db.js no existe en DEV
+  insertReserva = async (last, num) => ({ id: 0, last_name: last, booking_number: num, created_at: new Date().toISOString() });
   ultimasReservas = async () => [];
+  listReservas = async () => [];
+  countReservas = async () => 0;
+  deleteReserva = async () => 0;
 }
 
 // ====== Config ======
